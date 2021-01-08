@@ -86,6 +86,33 @@ Function EnableTelemetry {
 	Enable-ScheduledTask -TaskName "Microsoft\Office\OfficeTelemetryAgentLogOn2016" -ErrorAction SilentlyContinue | Out-Null
 }
 
+Function DisableCLITelemetry {
+	Write-Output "Disabling Telemetry for Dotnet/Powershell..."
+	[Environment]::SetEnvironmentVariable("DOTNET_CLI_TELEMETRY_OPTOUT", "1", [System.EnvironmentVariableTarget]::Machine)
+	[Environment]::SetEnvironmentVariable("POWERSHELL_TELEMETRY_OPTOUT", "1", [System.EnvironmentVariableTarget]::Machine)
+}
+
+Function EnableCLITelemetry {
+	Write-Output "Restoring Telemetry state for Dotnet/Powershell..."
+	[Environment]::SetEnvironmentVariable("DOTNET_CLI_TELEMETRY_OPTOUT", $null, [System.EnvironmentVariableTarget]::Machine)
+	[Environment]::SetEnvironmentVariable("POWERSHELL_TELEMETRY_OPTOUT", $null, [System.EnvironmentVariableTarget]::Machine)
+}
+
+# Disable immersive Control online search tips (SystemSettings.exe)
+Function DisableSystemSettingsTips {
+	Write-Output "Disabling SystemSettings.exe online tips..."
+	Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" -Name "AllowOnlineTips" -Type DWord -Value 0	-Force
+}
+
+Function EnableSystemSettingsTips {
+	$rootPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer"
+	Write-Output "Restoring SystemSettings.exe online tips state..."
+	If ($null -ne (Get-Item -Path $rootPath).GetValue("AllowOnlineTips")) {
+		Remove-ItemProperty -Path $rootPath -Name "AllowOnlineTips" -Force
+	}
+}
+
+
 # Disable Cortana
 Function DisableCortana {
 	Write-Output "Disabling Cortana..."
@@ -381,15 +408,53 @@ Function DisableBiometrics {
 	Write-Output "Disabling biometric services..."
 	If (!(Test-Path "HKLM:\SOFTWARE\Policies\Microsoft\Biometrics")) {
 		New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Biometrics" -Force | Out-Null
+		New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Biometrics\Credential Provider" -Force | Out-Null
 	}
 	Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Biometrics" -Name "Enabled" -Type DWord -Value 0
+	Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Biometrics\Credential Provider" -Name "Enabled" -Type DWord -Value 0
+	Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Biometrics\Credential Provider" -Name "Domain Accounts" -Type DWord -Value 0
 }
 
 # Enable biometric features
 Function EnableBiometrics {
 	Write-Output "Enabling biometric services..."
 	Remove-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Biometrics" -Name "Enabled" -ErrorAction SilentlyContinue
+	$tPath = "HKLM:\SOFTWARE\Policies\Microsoft\Biometrics\Credential Provider"
+	If (Test-Path $tPath) {
+		Remove-ItemProperty -Path $tPath -Name "Enabled" -ErrorAction SilentlyContinue
+		Remove-ItemProperty -Path $tPath -Name "Domain Accounts" -ErrorAction SilentlyContinue
+	}
 }
+
+# Disabled Windows Hello and Hello for Business stuff
+Function DisableHelloFeatures {
+	Write-Output "Disabling Windows Hello features..."
+	$tPath = "HKLM:\SOFTWARE\Policies\Microsoft\PassportForWork"
+	If (!(Test-Path $tPath)) {
+		New-Item -Path tPath -Force | Out-Null
+	}
+	Set-ItemProperty -Path $tPath -Name "Enabled" -Type DWord -Value 0
+	Set-ItemProperty -Path $tPath -Name "DisablePostLogonProvisioning" -Type DWord -Value 0
+	$tPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System"
+	If (!(Test-Path $tPath)) {
+		New-Item -Path tPath -Force | Out-Null
+	}
+	Set-ItemProperty -Path $tPath -Name "AllowDomainPINLogon" -Type DWord -Value 0
+}
+
+Function EnableHelloFeatures {
+	Write-Output "Restoring Windows Hello features state..."
+	$tPath = "HKLM:\SOFTWARE\Policies\Microsoft\PassportForWork"
+	If (Test-Path $tPath) {
+		Remove-ItemProperty -Path $tPath -Name "Enabled" -ErrorAction SilentlyContinue
+		Remove-ItemProperty -Path $tPath -Name "DisablePostLogonProvisioning" -ErrorAction SilentlyContinue
+	}
+	$tPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System"
+	If (Test-Path $tPath) {
+		Remove-ItemProperty -Path $tPath -Name "AllowDomainPINLogon" -ErrorAction SilentlyContinue
+	}
+}
+
 
 # Disable access to camera
 # Note: This disables access using standard Windows API. Direct access to device will still be allowed.
@@ -3208,6 +3273,41 @@ Function InstallOneDrive {
 		$onedrive = "$env:SYSTEMROOT\System32\OneDriveSetup.exe"
 	}
 	Start-Process $onedrive -NoNewWindow
+}
+
+# Uninstall new bundled with 2xxx MS Edge
+Function UninstallNewEdge {
+	Write-Output "Uninstalling Microsoft Edge..."
+	$edgeBase = ${Env:ProgramFiles(x86)} + "\Microsoft\Edge\Application\"
+	if (Test-Path "${edgeBase}msedge.exe" -PathType Leaf) {
+		$ver = [System.Diagnostics.FileVersionInfo]::GetVersionInfo("${edgeBase}msedge.exe").FileVersion
+		If ($null -ne $ver -And $ver.length -gt 4) {
+			Write-Output "Version ${ver} detected"
+		}
+		$uninstall = "${edgeBase}${ver}\Installer\setup.exe"
+		if (Test-Path $uninstall -PathType Leaf) {
+			$params = @{
+				"FilePath"     = $uninstall
+				"ArgumentList" = "--uninstall","--system-level","--force-uninstall"
+				"Wait"         = $true #TODO: could use global var to define if we wait in such cases
+				"PassThru"     = $true
+			}
+			Get-Process | Where-Object {$null -ne $_.Path -And $_.Path.Equals($uninstall)} | Stop-Process -Force -Confirm
+			$uprc = Start-Process @params
+			#$uprc.ExitCode
+		}
+		else {
+			Write-Error "Could not find Edge installer at $uninstall"
+		}
+	}
+	else {
+		Write-Output "Edge folder not found in $edgeBase"
+	}
+}
+
+# Dummy func, you need to install manually from installer
+Function InstallNewEdge {
+	Write-Output "Get Edge at https://www.microsoft.com/en-us/edge"
 }
 
 # Uninstall default Microsoft applications
